@@ -1,0 +1,78 @@
+openapi: 3.0.1
+info:
+  title: SingleAngle API
+  description: Research a topic, generate candidate content angles, score them, and return one structured brief.
+  version: 0.1.0
+servers:
+  - url: https://YOUR-DEPLOYED-API-HOST.example.com
+paths:
+  /singleangle:
+    post:
+      operationId: singleangle
+      summary: Generate one strong content angle for a topic
+      description: Takes a topic and optional audience/source text, then returns a winning content angle, hooks, arguments, and related brief elements.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - topic
+              properties:
+                topic:
+                  type: string
+                  description: The topic to research and turn into one sharp content angle.
+                audience:
+                  type: string
+                  description: Optional audience or ICP context.
+                depth:
+                  type: string
+                  description: light, standard, or deep.
+                source_texts:
+                  type: array
+                  description: Optional pre-collected research snippets.
+                  items:
+                    type: object
+                    properties:
+                      title:
+                        type: string
+                      url:
+                        type: string
+                      text:
+                        type: string
+                      source_type:
+                        type: string
+      responses:
+        '200':
+          description: Structured content angle brief
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topic:
+                    type: string
+                  audience:
+                    type: string
+                  evidence_note:
+                    type: string
+                  winning_angle:
+                    type: object
+                  runner_up_angles:
+                    type: array
+                    items:
+                      type: object
+                  brief:
+                    type: object
+                  sources:
+                    type: array
+                    items:
+                      type: object
+  /health:
+    get:
+      operationId: health
+      summary: Health check
+      responses:
+        '200':
+          description: API status
