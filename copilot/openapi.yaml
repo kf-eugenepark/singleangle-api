@@ -4,7 +4,7 @@ info:
   description: Research a topic, generate candidate content angles, score them, and return one structured brief.
   version: 0.1.0
 servers:
-  - url: https://YOUR-DEPLOYED-API-HOST.example.com
+  - url: https://singleangle-api-production.up.railway.app
 paths:
   /singleangle:
     post:
