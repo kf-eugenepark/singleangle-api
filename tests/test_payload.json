@@ -1,12 +1,13 @@
 {
   "topic": "AI outbound",
   "audience": "B2B growth leaders",
+  "depth": "standard",
   "source_texts": [
     {
       "title": "Example source",
       "url": "https://example.com/source",
       "source_type": "provided",
-      "text": "Teams are experimenting with AI outbound, but many operators report that reply quality depends more on targeting, offer quality, and data hygiene than on the AI writing layer itself."
+      "text": "AI outbound success depends more on targeting and offer quality than writing quality."
     }
   ]
 }

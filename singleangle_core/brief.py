@@ -5,11 +5,16 @@ def assemble_brief(topic: str, audience: str, sources: List[Dict], scored_angles
     winner = scored_angles[0] if scored_angles else None
     runner_ups = scored_angles[1:3] if len(scored_angles) > 1 else []
 
-    evidence_note = (
-        "No external sources were provided or collected. Treat this as an angle-generation draft, not a sourced research brief."
-        if not sources else
-        f"Based on {len(sources)} provided or collected source item(s)."
-    )
+    useful_sources = [s for s in sources if s.get("source_type") not in ("provider_error", "provider_status")]
+    errors = [s for s in sources if s.get("source_type") == "provider_error"]
+    statuses = [s for s in sources if s.get("source_type") == "provider_status"]
+
+    if not useful_sources:
+        evidence_note = "No usable external or provided sources were collected. Treat this as an unsourced angle draft."
+    else:
+        evidence_note = f"Based on {len(useful_sources)} usable source item(s)."
+        if errors or statuses:
+            evidence_note += " Some providers returned warnings or were skipped."
 
     angle_text = winner["angle"] if winner else f"No candidate angle generated for {topic}."
 
@@ -35,58 +40,53 @@ def assemble_brief(topic: str, audience: str, sources: List[Dict], scored_angles
 
 def build_hooks(topic: str, angle: str) -> List[str]:
     return [
-        f"Most people are reading {topic} at the surface. The sharper read is underneath it.",
-        f"The useful question about {topic} is not whether it works. It is what it reveals.",
-        f"The obvious take on {topic} is already crowded. This is the angle worth exploring."
+        f"The lazy take on {topic} is about the tool. The useful take is about the system around it.",
+        f"If {topic} feels disappointing, the bottleneck may not be the model. It may be the operating inputs around it.",
+        f"The teams winning with {topic} are probably not using better prompts. They are using better process discipline."
     ]
 
 
 def build_pro_arguments(topic: str, angle: str) -> List[str]:
     return [
-        "The angle shifts the conversation from broad opinion to a more testable mechanism.",
-        "It gives the writer a differentiated point of view without relying on contrarianism alone.",
-        "It creates room for evidence, examples, and counterpoints instead of a one-note claim."
+        "The angle moves the discussion from vague adoption claims to a testable operating mechanism.",
+        "It gives the writer a practical POV that can be supported with examples from process, data quality, and execution.",
+        "It avoids empty contrarianism by tying the claim to specific failure modes."
     ]
 
 
 def build_counterarguments(topic: str) -> List[str]:
     return [
-        f"The angle may overstate the significance of {topic} if the evidence base is thin.",
-        "The audience may need concrete examples before accepting the framing.",
-        "If the market already believes this, the angle needs a sharper proof point."
+        f"The angle may overstate the role of operating discipline if {topic} is still limited by technical capability.",
+        "The audience may need concrete examples before accepting the reframing.",
+        "If the market already believes this, the post needs a sharper proof point or named counter-case."
     ]
 
 
 def extract_stats(sources: List[Dict]) -> List[Dict]:
-    # Placeholder: add regex/stat extraction or provider metadata here.
     return []
 
 
 def extract_quotes(sources: List[Dict]) -> List[Dict]:
-    # Placeholder: add quote extraction from source text here.
     return []
 
 
 def build_story_moment(topic: str, angle: str) -> str:
-    return f"Open with a team or operator who adopted the obvious {topic} playbook, then discovered the real issue was the operating constraint underneath."
+    return f"Open with a team that adopted the standard {topic} playbook, saw mediocre results, and later discovered the issue was not the tool but the quality of targeting, inputs, and follow-through."
 
 
 def build_closing_lines(topic: str, angle: str) -> List[str]:
     return [
-        f"The point is not to be louder about {topic}. It is to be more precise about what it changes.",
-        "The strongest strategy is not the one with the cleanest narrative. It is the one that survives contact with execution.",
-        "The angle worth writing is the one that makes the reader see a familiar trend as a different problem."
+        f"The point is not to be more enthusiastic about {topic}. It is to be more precise about what actually makes it work.",
+        "Better tools do not rescue weak systems. They expose them faster.",
+        "The useful edge is not having the newest workflow. It is knowing which part of the workflow actually creates leverage."
     ]
 
 
 def summarize_sources(sources: List[Dict]) -> List[Dict]:
-    return [
-        {
-            "id": s.get("id"),
-            "title": s.get("title"),
-            "url": s.get("url"),
-            "source_type": s.get("source_type"),
-            "excerpt": (s.get("text", "")[:280] + "...") if len(s.get("text", "")) > 280 else s.get("text", "")
-        }
-        for s in sources
-    ]
+    return [{
+        "id": s.get("id"),
+        "title": s.get("title"),
+        "url": s.get("url"),
+        "source_type": s.get("source_type"),
+        "excerpt": (s.get("text", "")[:500] + "...") if len(s.get("text", "")) > 500 else s.get("text", "")
+    } for s in sources]

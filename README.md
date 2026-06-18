@@ -1,58 +1,35 @@
-# singleangle-m365-starter
+# SingleAngle M365 API with OpenAI + xAI providers
 
-A Microsoft 365 Copilot-compatible rebuild of the `singleangle` idea.
+This version adds maker-owned provider keys through Railway environment variables.
 
-This version does **not** rely on Claude Code local script execution. Instead:
+## Configure Railway variables
 
-- Microsoft 365 Copilot agent = orchestration and formatting
-- REST API action = execution layer
-- Python modules = research, angle generation, scoring, and brief assembly
-
-## Architecture
+Set:
 
 ```text
-User -> M365 Copilot Agent -> REST action `/singleangle` -> Python logic -> JSON -> Copilot formats response
+OPENAI_API_KEY=your OpenAI key
+XAI_API_KEY=your xAI key
+OPENAI_MODEL=gpt-5
+XAI_MODEL=grok-4.3
+OPENAI_WEB_SEARCH_TOOL=web_search_preview
 ```
 
-## Files
+If OpenAI web search fails, try changing `OPENAI_WEB_SEARCH_TOOL` to the tool name available to your account/model.
+
+## Deploy
+
+Commit these files to GitHub. Railway will rebuild from the Dockerfile.
+
+## Test
+
+POST to:
 
 ```text
-app.py                                  # FastAPI app Copilot calls
-singleangle_core/research.py             # source collection abstraction
-singleangle_core/lenses.py               # six angle lenses
-singleangle_core/scoring.py              # deterministic scoring
-singleangle_core/brief.py                # final brief assembly
-copilot/agent_instructions.md            # paste into Copilot agent instructions
-copilot/openapi.yaml                     # import/use for REST action
-.env.example                             # environment variables
+https://singleangle-api-production.up.railway.app/singleangle
 ```
 
-## Local run
+with `tests/test_payload.json`.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app:app --reload --port 8000
-```
+## Copilot Studio
 
-Test:
-
-```bash
-curl -X POST http://localhost:8000/singleangle \
-  -H "Content-Type: application/json" \
-  -d '{"topic":"AI outbound","audience":"B2B growth leaders"}'
-```
-
-## Copilot Studio / M365 Copilot integration
-
-1. Deploy this API somewhere reachable over HTTPS.
-2. In Copilot Studio, add a REST API tool/action using `copilot/openapi.yaml`.
-3. Paste `copilot/agent_instructions.md` into the agent instructions.
-4. Test with: "Find the strongest angle on AI outbound for growth leaders."
-
-## Important
-
-This starter does **not** include real Reddit, X, or web API integrations yet. Add them in `singleangle_core/research.py`.
-
-The scoring is deterministic but intentionally simple. Replace the functions in `singleangle_core/scoring.py` with your preferred methods.
+Keep the tool as maker-provided credentials for this phase. Re-upload `copilot/openapi.yaml` if Copilot Studio does not see the latest schema.
