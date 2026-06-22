@@ -39,7 +39,7 @@ class SingleAngleRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.1.1"}
+    return {"status": "ok", "version": "debug-v2"}
 
 
 def _safe_response_body(response):
