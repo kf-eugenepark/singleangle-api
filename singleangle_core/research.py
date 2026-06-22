@@ -64,7 +64,7 @@ def collect_sources(
                 "model": model,
                 "input": prompt
             },
-            timeout=10
+            timeout=30
         )
 
         if response.ok:
