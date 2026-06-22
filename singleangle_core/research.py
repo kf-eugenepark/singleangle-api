@@ -8,18 +8,10 @@ def collect_sources(
     depth: str = "standard",
     provider_keys: Optional[Dict] = None,
 ) -> List[Dict]:
-    """
-    Source collection layer.
-
-    Safe version:
-    - Keeps /health safe because provider imports are lazy.
-    - If depth == "light", skips OpenAI/xAI completely.
-    - If OpenAI/xAI fail, returns provider_error records instead of crashing the app.
-    """
 
     sources: List[Dict] = []
 
-    # 1. Include provided source_texts first
+    # 1. Include provided sources
     if provided_sources:
         for i, source in enumerate(provided_sources):
             text = (source.get("text") or "").strip()
@@ -27,20 +19,20 @@ def collect_sources(
                 continue
 
             sources.append({
-                "id": f"provided-{i + 1}",
-                "title": source.get("title") or f"Provided source {i + 1}",
+                "id": f"provided-{i+1}",
+                "title": source.get("title") or f"Provided source {i+1}",
                 "url": source.get("url"),
                 "text": text,
                 "source_type": source.get("source_type") or "provided"
             })
 
-    # 2. In light mode, do not call external providers
+    # 2. Skip external providers in light mode
     if depth == "light":
         return sources
 
     provider_keys = provider_keys or {}
 
-    # 3. OpenAI provider (lazy import)
+    # 3. OpenAI (safe import)
     try:
         from singleangle_core.providers import openai_reddit_research
 
@@ -54,14 +46,14 @@ def collect_sources(
 
     except Exception as e:
         sources.append({
-            "id": "openai-provider-error",
+            "id": "openai-error",
             "title": "OpenAI provider failed",
             "url": None,
             "source_type": "provider_error",
-            "text": f"OpenAI provider failed: {str(e)}"
+            "text": str(e)
         })
 
-    # 4. xAI provider (lazy import)
+    # 4. xAI (safe import)
     try:
         from singleangle_core.providers import xai_x_research
 
@@ -74,11 +66,11 @@ def collect_sources(
 
     except Exception as e:
         sources.append({
-            "id": "xai-provider-error",
+            "id": "xai-error",
             "title": "xAI provider failed",
             "url": None,
             "source_type": "provider_error",
-            "text": f"xAI provider failed: {str(e)}"
+            "text": str(e)
         })
 
     return sources
