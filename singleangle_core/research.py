@@ -40,7 +40,7 @@ def collect_sources(
 
     provider_keys = provider_keys or {}
 
-    # 3. OpenAI provider, imported lazily so startup cannot break
+    # 3. OpenAI provider (lazy import)
     try:
         from singleangle_core.providers import openai_reddit_research
 
@@ -61,7 +61,7 @@ def collect_sources(
             "text": f"OpenAI provider failed: {str(e)}"
         })
 
-    # 4. xAI/Grok provider, imported lazily so startup cannot break
+    # 4. xAI provider (lazy import)
     try:
         from singleangle_core.providers import xai_x_research
 
