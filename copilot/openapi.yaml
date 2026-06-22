@@ -2,7 +2,7 @@ openapi: 3.0.1
 info:
   title: SingleAngle API
   description: Research a topic, generate candidate content angles, score them, and return one structured brief.
-  version: 0.2.0
+  version: 0.1.0
 servers:
   - url: https://singleangle-api-production.up.railway.app
 paths:
@@ -28,7 +28,7 @@ paths:
                   description: Optional audience or ICP context.
                 depth:
                   type: string
-                  description: Use light to skip provider research; use standard for OpenAI and xAI provider research.
+                  description: light, standard, or deep.
                 source_texts:
                   type: array
                   description: Optional pre-collected research snippets.

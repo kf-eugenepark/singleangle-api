@@ -1,4 +1,3 @@
-import os
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -11,7 +10,7 @@ from singleangle_core.brief import assemble_brief
 app = FastAPI(
     title="SingleAngle API",
     description="Research a topic, generate candidate content angles, score them, and return one structured content brief.",
-    version="0.2.0"
+    version="0.1.0"
 )
 
 class SourceInput(BaseModel):
@@ -28,24 +27,15 @@ class SingleAngleRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.2.0"}
+    return {"status": "ok"}
 
 @app.post("/singleangle")
 def singleangle(req: SingleAngleRequest) -> Dict[str, Any]:
-    provider_keys = {
-        "openai_api_key": os.environ.get("OPENAI_API_KEY"),
-        "xai_api_key": os.environ.get("XAI_API_KEY"),
-        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-5"),
-        "xai_model": os.environ.get("XAI_MODEL", "grok-4.3"),
-        "openai_web_search_tool": os.environ.get("OPENAI_WEB_SEARCH_TOOL", "web_search_preview"),
-    }
-
     sources = collect_sources(
         topic=req.topic,
         audience=req.audience or "",
         provided_sources=[s.model_dump() for s in req.source_texts] if req.source_texts else None,
-        depth=req.depth or "standard",
-        provider_keys=provider_keys,
+        depth=req.depth or "standard"
     )
 
     candidates = generate_candidate_angles(
@@ -68,3 +58,12 @@ def singleangle(req: SingleAngleRequest) -> Dict[str, Any]:
     )
 
     return brief
+
+
+import os
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
+
