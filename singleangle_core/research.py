@@ -8,6 +8,14 @@ def collect_sources(
     depth: str = "standard",
     provider_keys: Optional[Dict] = None,
 ) -> List[Dict]:
+    """
+    Source collection layer.
+
+    Safe version:
+    - Keeps /health safe because provider imports are lazy.
+    - If depth == "light", skips OpenAI/xAI completely.
+    - If OpenAI/xAI fail, returns provider_error records instead of crashing the app.
+    """
 
     sources: List[Dict] = []
 
@@ -19,8 +27,8 @@ def collect_sources(
                 continue
 
             sources.append({
-                "id": f"provided-{i+1}",
-                "title": source.get("title") or f"Provided source {i+1}",
+                "id": f"provided-{i + 1}",
+                "title": source.get("title") or f"Provided source {i + 1}",
                 "url": source.get("url"),
                 "text": text,
                 "source_type": source.get("source_type") or "provided"
@@ -32,7 +40,7 @@ def collect_sources(
 
     provider_keys = provider_keys or {}
 
-    # 3. OpenAI (safe import)
+    # 3. OpenAI provider, imported lazily so startup cannot break
     try:
         from singleangle_core.providers import openai_reddit_research
 
@@ -46,14 +54,14 @@ def collect_sources(
 
     except Exception as e:
         sources.append({
-            "id": "openai-error",
+            "id": "openai-provider-error",
             "title": "OpenAI provider failed",
             "url": None,
             "source_type": "provider_error",
-            "text": str(e)
+            "text": f"OpenAI provider failed: {str(e)}"
         })
 
-    # 4. xAI (safe import)
+    # 4. xAI/Grok provider, imported lazily so startup cannot break
     try:
         from singleangle_core.providers import xai_x_research
 
@@ -66,11 +74,11 @@ def collect_sources(
 
     except Exception as e:
         sources.append({
-            "id": "xai-error",
+            "id": "xai-provider-error",
             "title": "xAI provider failed",
             "url": None,
             "source_type": "provider_error",
-            "text": str(e)
+            "text": f"xAI provider failed: {str(e)}"
         })
 
     return sources
