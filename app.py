@@ -178,7 +178,11 @@ def singleangle(req: SingleAngleRequest) -> Dict[str, Any]:
     )
 
 
-    brief["angle_statement"] = "DEBUG: SINGLEANGLE_CALLED | " + brief["angle_statement"]
+
+    brief["brief"]["angle_statement"] = (
+        "DEBUG: SINGLEANGLE_CALLED | " + brief["brief"]["angle_statement"]
+    )
+
     
     return brief
 
