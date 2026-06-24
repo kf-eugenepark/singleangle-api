@@ -177,7 +177,12 @@ def singleangle(req: SingleAngleRequest) -> Dict[str, Any]:
         scored_angles=scored
     )
 
-    return brief
+    return {
+        "debug": "singleangle_live_call",
+        "brief": brief,
+        "source_count": len(sources),
+        "source_types": [s.get("source_type") for s in sources]
+    }
 
 
 if __name__ == "__main__":
