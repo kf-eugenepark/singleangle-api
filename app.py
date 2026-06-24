@@ -185,12 +185,14 @@ def singleangle(req: SingleAngleRequest) -> Dict[str, Any]:
 
     
 
+
     return {
-        "angle_statement": "ONLY_FROM_API_TEST",
-        "hooks": [],
-        "pro_arguments": [],
-        "counterarguments": []
+        "angle": brief["brief"]["angle_statement"],
+        "hooks": brief["brief"]["hooks"],
+        "arguments": brief["brief"]["pro_arguments"],
+        "counterarguments": brief["brief"]["counterarguments"]
     }
+
 
 
 
