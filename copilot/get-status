@@ -1,0 +1,36 @@
+openapi: 3.0.1
+info:
+  title: Get Job Status
+  version: 0.6.0
+servers:
+  - url: https://singleangle-api-production.up.railway.app
+paths:
+  /singleangle/status:
+    get:
+      operationId: getJobStatus
+      summary: Check status of a research job
+      description: Returns current status (running, done, error) and phase of a job.
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  phase:
+                    type: string
+                  elapsed_seconds:
+                    type: number
+                  error:
+                    type: object
