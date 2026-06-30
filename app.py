@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
@@ -18,9 +20,11 @@ from pydantic import BaseModel, Field
 #   /app.py
 #   /scripts/singleangle-research.py
 #   /scripts/lib/
+#   /static/index.html
 # ---------------------------------------------------------------------------
 REPO_ROOT   = Path(__file__).parent.resolve()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+STATIC_DIR  = REPO_ROOT / "static"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -36,7 +40,6 @@ def _load_engine():
 
 engine = _load_engine()
 
-# lib helpers used at the API boundary
 from lib import env as sa_env
 from lib import models as sa_models
 from lib import render as sa_render
@@ -44,14 +47,26 @@ from lib import dates as sa_dates
 from lib import schema as sa_schema
 
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.4.0"
+    version="0.5.0"
 )
+
+
+# ---------------------------------------------------------------------------
+# Static files
+# ---------------------------------------------------------------------------
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/")
+def serve_index():
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.exists():
+        return {"status": "ok", "version": app.version, "ui": "missing static/index.html"}
+    return FileResponse(str(index_path))
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +131,6 @@ def _provider_event(job_id: str, name: str, **fields):
 
 
 def _ensure_list_of_dicts(items):
-    """Normalize provider output into a list of dicts so Report.from_dict can rebuild dataclasses."""
     out = []
     for item in items or []:
         if isinstance(item, dict):
@@ -128,7 +142,6 @@ def _ensure_list_of_dicts(items):
 
 def _build_report(topic, from_date, to_date, effective_sources,
                   selected_models, result_tuple):
-    """Build a Report from a tuple-like run_research() return."""
     reddit_items_raw = []
     x_items_raw = []
     reddit_error = None
@@ -167,8 +180,7 @@ def _build_report(topic, from_date, to_date, effective_sources,
     return report, reddit_dicts, x_dicts, reddit_error, x_error
 
 
-def _shape_of(value, depth=0, max_depth=3):
-    """Return a JSON-safe description of a value's structure for introspection."""
+def _shape_of(value, depth=0, max_depth=4):
     if depth > max_depth:
         return f"<truncated:{type(value).__name__}>"
 
@@ -176,10 +188,7 @@ def _shape_of(value, depth=0, max_depth=3):
         return {
             "type": "dict",
             "keys": list(value.keys()),
-            "sample": {
-                k: _shape_of(v, depth + 1, max_depth)
-                for k, v in list(value.items())[:5]
-            },
+            "sample": {k: _shape_of(v, depth + 1, max_depth) for k, v in list(value.items())[:5]},
         }
     if isinstance(value, (list, tuple)):
         sample_items = list(value)[:3]
@@ -190,7 +199,6 @@ def _shape_of(value, depth=0, max_depth=3):
         }
     if value is None:
         return "NoneType"
-
     return f"<{type(value).__name__}>"
 
 
@@ -365,10 +373,7 @@ def debug_env():
 
 @app.get("/debug-engine-shape")
 def debug_engine_shape(topic: str = "AI in B2B sales execution"):
-    """
-    Runs the engine in mock mode and returns the actual structure of run_research().
-    Use this to introspect the wrapper boundary without burning OpenAI / xAI calls.
-    """
+    """Runs the engine in mock mode and returns the actual structure of run_research()."""
     config = sa_env.get_config()
     available = sa_env.get_available_sources(config)
     effective_sources, _ = sa_env.validate_sources(
