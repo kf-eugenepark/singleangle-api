@@ -1,0 +1,46 @@
+openapi: 3.0.1
+info:
+  title: Start Research
+  version: 0.6.0
+servers:
+  - url: https://singleangle-api-production.up.railway.app
+paths:
+  /singleangle/start:
+    post:
+      operationId: startResearch
+      summary: Start a research job on a topic
+      description: Starts an async research job. Returns job_id immediately. Research takes 60-120 seconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - topic
+              properties:
+                topic:
+                  type: string
+                audience:
+                  type: string
+                depth:
+                  type: string
+                  enum: [quick, default, deep]
+                  default: default
+                days:
+                  type: integer
+                  default: 30
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  started_at:
+                    type: string
