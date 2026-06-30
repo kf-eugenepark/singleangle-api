@@ -13,7 +13,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
-# Layout assumption (matches upstream singleangle):
+# Repo layout assumption (matches upstream singleangle):
+#
 #   /app.py
 #   /scripts/singleangle-research.py
 #   /scripts/lib/
@@ -21,21 +22,23 @@ from pydantic import BaseModel, Field
 REPO_ROOT   = Path(__file__).parent.resolve()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-# IMPORTANT: add scripts/ to sys.path so `from lib import ...` resolves
-# to scripts/lib/, exactly like the original CLI does.
+# Add scripts/ to sys.path so `from lib import ...` resolves to scripts/lib/,
+# exactly like the original CLI does.
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-# Load singleangle-research.py as a module (its filename has a hyphen).
+
 def _load_engine():
+    """Load scripts/singleangle-research.py as a module (hyphen prevents normal import)."""
     engine_path = SCRIPTS_DIR / "singleangle-research.py"
     spec = importlib.util.spec_from_file_location("singleangle_research", str(engine_path))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
+
 engine = _load_engine()
 
-# Now lib helpers work the same way they do inside the original script
+# Lib helpers used at the API boundary
 from lib import env as sa_env
 from lib import models as sa_models
 from lib import render as sa_render
@@ -48,16 +51,16 @@ from lib import dates as sa_dates
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.0"
+    version="0.3.1"
 )
 
 
 # ---------------------------------------------------------------------------
-# Request / response models
+# Request models
 # ---------------------------------------------------------------------------
 class StartRequest(BaseModel):
     topic: str = Field(..., description="Topic to research.")
-    audience: Optional[str] = Field(default="", description="Optional audience or ICP context. Used by Copilot at brief synthesis time.")
+    audience: Optional[str] = Field(default="", description="Optional audience or ICP context.")
     depth: Optional[str] = Field(default="default", description="quick | default | deep")
     days: Optional[int] = Field(default=30, description="Lookback window in days (1-30).")
     sources: Optional[str] = Field(default="auto", description="auto | reddit | x | both | web")
@@ -71,7 +74,7 @@ class StartResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-memory job store
+# Job store
 # ---------------------------------------------------------------------------
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
@@ -80,8 +83,8 @@ JOBS_LOCK = threading.Lock()
 def _new_job_record(req: StartRequest) -> Dict[str, Any]:
     return {
         "job_id": str(uuid.uuid4()),
-        "status": "running",       # running | done | error
-        "phase": "initializing",   # human-readable phase
+        "status": "running",
+        "phase": "initializing",
         "started_at": datetime.now(timezone.utc).isoformat(),
         "finished_at": None,
         "elapsed_seconds": 0.0,
@@ -113,22 +116,18 @@ def _provider_event(job_id: str, name: str, **fields):
             JOBS[job_id]["providers"][name].update(fields)
 
 
-# ---------------------------------------------------------------------------
-# Background worker
-# ---------------------------------------------------------------------------
 def _run_job(job_id: str):
     started = time.time()
     try:
         with JOBS_LOCK:
             job = JOBS[job_id]
-            topic = job["topic"]
-            depth = job["depth"]
-            days = job["days"]
+            topic   = job["topic"]
+            depth   = job["depth"]
+            days    = job["days"]
             sources_requested = job["sources"]
             x_source = job["x_source"]
 
         _set_phase(job_id, "loading_config")
-
         config = sa_env.get_config()
         available = sa_env.get_available_sources(config)
         effective_sources, source_warning = sa_env.validate_sources(
@@ -144,15 +143,12 @@ def _run_job(job_id: str):
         selected_models = sa_models.get_models(config)
 
         _set_phase(job_id, "computing_date_range")
-        from_date, to_date = sa_dates.compute_range(days=days)
+        from_date, to_date = sa_dates.get_date_range(days=days)
 
         _set_phase(job_id, "running_research")
 
-        # Wrap provider timing using the progress hook the engine supports
         def progress(event: str, **kwargs):
-            # Engine emits events like phase changes and provider lifecycle.
-            # We map known events to the providers dict; unknown events just update phase.
-            ev = event.lower()
+            ev = event.lower() if isinstance(event, str) else ""
 
             if "reddit" in ev and "start" in ev:
                 _provider_event(job_id, "openai_reddit", status="running", started=time.time())
@@ -169,7 +165,7 @@ def _run_job(job_id: str):
             elif "reddit" in ev and "error" in ev:
                 _provider_event(job_id, "openai_reddit", status="error", error=kwargs.get("error"))
 
-            elif ev.startswith("x_") or " x " in ev or ev.startswith("x:"):
+            elif ev.startswith("x_") or " x " in ev or ev.startswith("x:") or "xai" in ev:
                 if "start" in ev:
                     _provider_event(job_id, "xai_x", status="running", started=time.time())
                 elif "done" in ev or "complete" in ev:
@@ -203,11 +199,8 @@ def _run_job(job_id: str):
 
         _set_phase(job_id, "rendering_output")
 
-        # Render compact markdown using the original render module.
         missing_keys = sa_env.get_missing_keys(config)
         research_markdown = sa_render.render_compact(report, missing_keys=missing_keys)
-
-        # Also keep the structured report for clients that want JSON.
         report_json = report.to_dict() if hasattr(report, "to_dict") else None
 
         total = time.time() - started
@@ -242,7 +235,7 @@ def _run_job(job_id: str):
 
 
 # ---------------------------------------------------------------------------
-# Health + debug
+# Health and debug endpoints
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
@@ -292,7 +285,6 @@ def status(job_id: str):
 
     elapsed = job.get("elapsed_seconds") or 0.0
     if job["status"] == "running":
-        # live elapsed
         try:
             started_dt = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
             elapsed = (datetime.now(timezone.utc) - started_dt).total_seconds()
@@ -347,17 +339,3 @@ def result(job_id: str):
         "days": job["days"],
         "sources": job["sources"],
         "x_source": job["x_source"],
-        "providers_timing": job["providers"],
-        "total_duration_seconds": job["elapsed_seconds"],
-        "from_date": job["result"]["from_date"],
-        "to_date": job["result"]["to_date"],
-        "research_markdown": job["result"]["research_markdown"],
-        "report_json": job["result"]["report_json"],
-        "source_warning": job["result"].get("source_warning"),
-    }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
