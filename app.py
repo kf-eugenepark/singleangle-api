@@ -50,7 +50,7 @@ from lib import dates as sa_dates
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.2"
+    version="0.3.3"
 )
 
 
@@ -219,7 +219,10 @@ def _run_job(job_id: str):
 
         progress = _Progress(job_id)
 
-        report = engine.run_research(
+        # The original run_research() returns a tuple, not a Report.
+        # First element is the Report; remaining elements are raw responses
+        # and per-provider errors used by the CLI for debug output.
+        result = engine.run_research(
             topic=topic,
             sources=effective_sources,
             config=config,
@@ -231,6 +234,20 @@ def _run_job(job_id: str):
             progress=progress,
             x_source=x_source,
         )
+
+        if isinstance(result, tuple):
+            report = result[0]
+        else:
+            report = result
+
+        # Surface engine-level provider errors into the job, if present.
+        if isinstance(result, tuple) and len(result) >= 6:
+            reddit_err = result[4]
+            x_err      = result[5]
+            if reddit_err:
+                _provider_event(job_id, "openai_reddit", status="error", error=str(reddit_err))
+            if x_err:
+                _provider_event(job_id, "xai_x", status="error", error=str(x_err))
 
         _set_phase(job_id, "rendering_output")
 
