@@ -12,13 +12,22 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+
+# ---------------------------------------------------------------------------
+# Repo layout (matches upstream singleangle):
+#   /app.py
+#   /scripts/singleangle-research.py
+#   /scripts/lib/
+# ---------------------------------------------------------------------------
 REPO_ROOT   = Path(__file__).parent.resolve()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
+# Make `from lib import ...` resolve to scripts/lib/, like the original CLI does.
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def _load_engine():
+    """Load scripts/singleangle-research.py as a module (hyphen prevents normal import)."""
     engine_path = SCRIPTS_DIR / "singleangle-research.py"
     spec = importlib.util.spec_from_file_location("singleangle_research", str(engine_path))
     module = importlib.util.module_from_spec(spec)
@@ -28,19 +37,26 @@ def _load_engine():
 
 engine = _load_engine()
 
+# lib helpers used at the API boundary
 from lib import env as sa_env
 from lib import models as sa_models
 from lib import render as sa_render
 from lib import dates as sa_dates
 
 
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.1"
+    version="0.3.2"
 )
 
 
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
 class StartRequest(BaseModel):
     topic: str = Field(..., description="Topic to research.")
     audience: Optional[str] = Field(default="", description="Optional audience or ICP context.")
@@ -56,6 +72,9 @@ class StartResponse(BaseModel):
     started_at: str
 
 
+# ---------------------------------------------------------------------------
+# In-memory job store
+# ---------------------------------------------------------------------------
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
@@ -96,6 +115,9 @@ def _provider_event(job_id: str, name: str, **fields):
             JOBS[job_id]["providers"][name].update(fields)
 
 
+# ---------------------------------------------------------------------------
+# Background worker
+# ---------------------------------------------------------------------------
 def _run_job(job_id: str):
     started = time.time()
     try:
@@ -127,44 +149,75 @@ def _run_job(job_id: str):
 
         _set_phase(job_id, "running_research")
 
-        def progress(event: str, **kwargs):
-            ev = event.lower() if isinstance(event, str) else ""
+        class _Progress:
+            """
+            Lightweight progress reporter expected by singleangle's run_research().
+            The original CLI passes a UI object with methods like start_reddit(),
+            done_reddit(item_count=...), start_x(), done_x(...), etc.
+            We expose the same interface but route events into the async job state.
+            """
 
-            if "reddit" in ev and "start" in ev:
-                _provider_event(job_id, "openai_reddit", status="running", started=time.time())
-            elif "reddit" in ev and ("done" in ev or "complete" in ev):
+            def __init__(self, job_id: str):
+                self.job_id = job_id
+
+            # --- Reddit ---
+            def start_reddit(self, *args, **kwargs):
+                _provider_event(self.job_id, "openai_reddit", status="running", started=time.time())
+
+            def done_reddit(self, *args, **kwargs):
                 with JOBS_LOCK:
-                    started_at = JOBS[job_id]["providers"]["openai_reddit"].get("started")
+                    started_at = JOBS[self.job_id]["providers"]["openai_reddit"].get("started")
                 duration = (time.time() - started_at) if started_at else None
                 _provider_event(
-                    job_id,
-                    "openai_reddit",
+                    self.job_id, "openai_reddit",
                     status="done",
                     duration=round(duration, 2) if duration else None,
                     item_count=kwargs.get("item_count"),
                 )
-            elif "reddit" in ev and "error" in ev:
-                _provider_event(job_id, "openai_reddit", status="error", error=kwargs.get("error"))
 
-            elif ev.startswith("x_") or " x " in ev or ev.startswith("x:") or "xai" in ev:
-                if "start" in ev:
-                    _provider_event(job_id, "xai_x", status="running", started=time.time())
-                elif "done" in ev or "complete" in ev:
-                    with JOBS_LOCK:
-                        started_at = JOBS[job_id]["providers"]["xai_x"].get("started")
-                    duration = (time.time() - started_at) if started_at else None
-                    _provider_event(
-                        job_id,
-                        "xai_x",
-                        status="done",
-                        duration=round(duration, 2) if duration else None,
-                        item_count=kwargs.get("item_count"),
-                    )
-                elif "error" in ev:
-                    _provider_event(job_id, "xai_x", status="error", error=kwargs.get("error"))
+            def error_reddit(self, *args, **kwargs):
+                _provider_event(
+                    self.job_id, "openai_reddit",
+                    status="error",
+                    error=kwargs.get("error") or (args[0] if args else None),
+                )
 
-            elif "phase" in ev or "supplemental" in ev:
-                _set_phase(job_id, event)
+            # --- X ---
+            def start_x(self, *args, **kwargs):
+                _provider_event(self.job_id, "xai_x", status="running", started=time.time())
+
+            def done_x(self, *args, **kwargs):
+                with JOBS_LOCK:
+                    started_at = JOBS[self.job_id]["providers"]["xai_x"].get("started")
+                duration = (time.time() - started_at) if started_at else None
+                _provider_event(
+                    self.job_id, "xai_x",
+                    status="done",
+                    duration=round(duration, 2) if duration else None,
+                    item_count=kwargs.get("item_count"),
+                )
+
+            def error_x(self, *args, **kwargs):
+                _provider_event(
+                    self.job_id, "xai_x",
+                    status="error",
+                    error=kwargs.get("error") or (args[0] if args else None),
+                )
+
+            # --- Supplemental phase ---
+            def start_supplemental(self, *args, **kwargs):
+                _set_phase(self.job_id, "running_supplemental")
+
+            def done_supplemental(self, *args, **kwargs):
+                _set_phase(self.job_id, "supplemental_complete")
+
+            # --- Safety net for any other method singleangle calls ---
+            def __getattr__(self, name):
+                def _noop(*args, **kwargs):
+                    _set_phase(self.job_id, f"engine:{name}")
+                return _noop
+
+        progress = _Progress(job_id)
 
         report = engine.run_research(
             topic=topic,
@@ -216,6 +269,9 @@ def _run_job(job_id: str):
                 }
 
 
+# ---------------------------------------------------------------------------
+# Health and debug endpoints
+# ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "version": app.version}
@@ -233,6 +289,9 @@ def debug_env():
     }
 
 
+# ---------------------------------------------------------------------------
+# Async endpoints
+# ---------------------------------------------------------------------------
 @app.post("/singleangle/start", response_model=StartResponse)
 def start(req: StartRequest):
     if not req.topic or not req.topic.strip():
