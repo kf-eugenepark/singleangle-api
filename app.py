@@ -16,8 +16,9 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Repo layout (matches upstream singleangle):
+# Repo layout:
 #   /app.py
+#   /brief_synthesis.py
 #   /scripts/singleangle-research.py
 #   /scripts/lib/
 #   /static/index.html
@@ -30,7 +31,6 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def _load_engine():
-    """Load scripts/singleangle-research.py as a module (hyphen prevents normal import)."""
     engine_path = SCRIPTS_DIR / "singleangle-research.py"
     spec = importlib.util.spec_from_file_location("singleangle_research", str(engine_path))
     module = importlib.util.module_from_spec(spec)
@@ -46,17 +46,16 @@ from lib import render as sa_render
 from lib import dates as sa_dates
 from lib import schema as sa_schema
 
+import brief_synthesis as sa_brief
+
 
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
-    description="Async wrapper around the original singleangle research engine.",
-    version="0.5.0"
+    description="Async wrapper around the original singleangle research engine + brief synthesis.",
+    version="0.6.0"
 )
 
 
-# ---------------------------------------------------------------------------
-# Static files
-# ---------------------------------------------------------------------------
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -70,7 +69,7 @@ def serve_index():
 
 
 # ---------------------------------------------------------------------------
-# Request / response models
+# Models
 # ---------------------------------------------------------------------------
 class StartRequest(BaseModel):
     topic: str = Field(..., description="Topic to research.")
@@ -87,14 +86,17 @@ class StartResponse(BaseModel):
     started_at: str
 
 
-# ---------------------------------------------------------------------------
-# In-memory job store
-# ---------------------------------------------------------------------------
+class BriefRequest(BaseModel):
+    job_id: str = Field(..., description="Existing completed job_id.")
+    audience: Optional[str] = Field(default=None, description="Override audience for synthesis.")
+    model: Optional[str] = Field(default="gpt-5.5", description="OpenAI model id.")
+
+
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
 
-def _new_job_record(req: StartRequest) -> Dict[str, Any]:
+def _new_job_record(req: StartRequest):
     return {
         "job_id": str(uuid.uuid4()),
         "status": "running",
@@ -118,13 +120,13 @@ def _new_job_record(req: StartRequest) -> Dict[str, Any]:
     }
 
 
-def _set_phase(job_id: str, phase: str):
+def _set_phase(job_id, phase):
     with JOBS_LOCK:
         if job_id in JOBS:
             JOBS[job_id]["phase"] = phase
 
 
-def _provider_event(job_id: str, name: str, **fields):
+def _provider_event(job_id, name, **fields):
     with JOBS_LOCK:
         if job_id in JOBS:
             JOBS[job_id]["providers"][name].update(fields)
@@ -140,8 +142,7 @@ def _ensure_list_of_dicts(items):
     return out
 
 
-def _build_report(topic, from_date, to_date, effective_sources,
-                  selected_models, result_tuple):
+def _build_report(topic, from_date, to_date, effective_sources, selected_models, result_tuple):
     reddit_items_raw = []
     x_items_raw = []
     reddit_error = None
@@ -180,32 +181,7 @@ def _build_report(topic, from_date, to_date, effective_sources,
     return report, reddit_dicts, x_dicts, reddit_error, x_error
 
 
-def _shape_of(value, depth=0, max_depth=4):
-    if depth > max_depth:
-        return f"<truncated:{type(value).__name__}>"
-
-    if isinstance(value, dict):
-        return {
-            "type": "dict",
-            "keys": list(value.keys()),
-            "sample": {k: _shape_of(v, depth + 1, max_depth) for k, v in list(value.items())[:5]},
-        }
-    if isinstance(value, (list, tuple)):
-        sample_items = list(value)[:3]
-        return {
-            "type": type(value).__name__,
-            "length": len(value),
-            "sample_item_shapes": [_shape_of(s, depth + 1, max_depth) for s in sample_items],
-        }
-    if value is None:
-        return "NoneType"
-    return f"<{type(value).__name__}>"
-
-
-# ---------------------------------------------------------------------------
-# Background worker
-# ---------------------------------------------------------------------------
-def _run_job(job_id: str):
+def _run_job(job_id):
     started = time.time()
     try:
         with JOBS_LOCK:
@@ -225,7 +201,7 @@ def _run_job(job_id: str):
             include_web=False,
         )
         if effective_sources == "none":
-            raise RuntimeError(f"No valid sources for this configuration: {source_warning}")
+            raise RuntimeError("No valid sources for this configuration: " + str(source_warning))
 
         _set_phase(job_id, "selecting_models")
         selected_models = sa_models.get_models(config)
@@ -236,7 +212,7 @@ def _run_job(job_id: str):
         _set_phase(job_id, "running_research")
 
         class _Progress:
-            def __init__(self, job_id: str):
+            def __init__(self, job_id):
                 self.job_id = job_id
 
             def start_reddit(self, *a, **kw):
@@ -279,7 +255,7 @@ def _run_job(job_id: str):
 
             def __getattr__(self, name):
                 def _noop(*a, **kw):
-                    _set_phase(self.job_id, f"engine:{name}")
+                    _set_phase(self.job_id, "engine:" + name)
                 return _noop
 
         progress = _Progress(job_id)
@@ -335,6 +311,9 @@ def _run_job(job_id: str):
                 "context_markdown": context_markdown,
                 "report_json": report_json,
                 "source_warning": source_warning,
+                "brief_markdown": None,
+                "brief_model": None,
+                "brief_generated_at": None,
             }
 
     except Exception as e:
@@ -351,9 +330,6 @@ def _run_job(job_id: str):
                 }
 
 
-# ---------------------------------------------------------------------------
-# Health and debug endpoints
-# ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "version": app.version}
@@ -371,55 +347,6 @@ def debug_env():
     }
 
 
-@app.get("/debug-engine-shape")
-def debug_engine_shape(topic: str = "AI in B2B sales execution"):
-    """Runs the engine in mock mode and returns the actual structure of run_research()."""
-    config = sa_env.get_config()
-    available = sa_env.get_available_sources(config)
-    effective_sources, _ = sa_env.validate_sources(
-        requested="auto",
-        available=available,
-        include_web=False,
-    )
-    selected_models = sa_models.get_models(config)
-    from_date, to_date = sa_dates.get_date_range(days=30)
-
-    class _NullProgress:
-        def __getattr__(self, name):
-            def _noop(*a, **kw): pass
-            return _noop
-
-    try:
-        raw = engine.run_research(
-            topic=topic,
-            sources=effective_sources,
-            config=config,
-            selected_models=selected_models,
-            from_date=from_date,
-            to_date=to_date,
-            depth="default",
-            mock=True,
-            progress=_NullProgress(),
-            x_source="xai",
-        )
-    except Exception as e:
-        return {
-            "ok": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()[-2000:],
-        }
-
-    return {
-        "ok": True,
-        "mock": True,
-        "return_type": type(raw).__name__,
-        "shape": _shape_of(raw),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Async endpoints
-# ---------------------------------------------------------------------------
 @app.post("/singleangle/start", response_model=StartResponse)
 def start(req: StartRequest):
     if not req.topic or not req.topic.strip():
@@ -493,6 +420,7 @@ def result(job_id: str):
             "error": job["error"]
         }
 
+    r = job["result"]
     return {
         "job_id": job["job_id"],
         "status": "done",
@@ -504,13 +432,72 @@ def result(job_id: str):
         "x_source": job["x_source"],
         "providers_timing": job["providers"],
         "total_duration_seconds": job["elapsed_seconds"],
-        "from_date": job["result"]["from_date"],
-        "to_date": job["result"]["to_date"],
-        "research_markdown": job["result"]["research_markdown"],
-        "full_markdown": job["result"].get("full_markdown"),
-        "context_markdown": job["result"].get("context_markdown"),
-        "report_json": job["result"]["report_json"],
-        "source_warning": job["result"].get("source_warning"),
+        "from_date": r["from_date"],
+        "to_date": r["to_date"],
+        "research_markdown": r["research_markdown"],
+        "full_markdown": r.get("full_markdown"),
+        "context_markdown": r.get("context_markdown"),
+        "report_json": r["report_json"],
+        "source_warning": r.get("source_warning"),
+        "brief_markdown": r.get("brief_markdown"),
+        "brief_model": r.get("brief_model"),
+        "brief_generated_at": r.get("brief_generated_at"),
+    }
+
+
+@app.post("/singleangle/brief")
+def brief(req: BriefRequest):
+    with JOBS_LOCK:
+        job = JOBS.get(req.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job_id not found")
+    if job["status"] != "done":
+        raise HTTPException(status_code=400, detail="Job is not done yet. Wait for status:done.")
+
+    r = job["result"]
+    if r.get("brief_markdown"):
+        return {
+            "job_id": req.job_id,
+            "status": "done",
+            "cached": True,
+            "brief_markdown": r["brief_markdown"],
+            "brief_model": r.get("brief_model"),
+            "brief_generated_at": r.get("brief_generated_at"),
+        }
+
+    audience = req.audience if (req.audience is not None) else job["audience"]
+    model = req.model or "gpt-5.5"
+
+    try:
+        brief_md = sa_brief.assemble_brief(
+            research_markdown=r["research_markdown"],
+            topic=job["topic"],
+            audience=audience or "",
+            from_date=r["from_date"],
+            to_date=r["to_date"],
+            model=model,
+        )
+    except Exception as e:
+        return {
+            "job_id": req.job_id,
+            "status": "error",
+            "error": {"message": str(e)},
+        }
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    with JOBS_LOCK:
+        if req.job_id in JOBS and JOBS[req.job_id].get("result"):
+            JOBS[req.job_id]["result"]["brief_markdown"] = brief_md
+            JOBS[req.job_id]["result"]["brief_model"] = model
+            JOBS[req.job_id]["result"]["brief_generated_at"] = generated_at
+
+    return {
+        "job_id": req.job_id,
+        "status": "done",
+        "cached": False,
+        "brief_markdown": brief_md,
+        "brief_model": model,
+        "brief_generated_at": generated_at,
     }
 
 
