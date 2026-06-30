@@ -1,0 +1,180 @@
+openapi: 3.0.1
+info:
+  title: SingleAngle Research API
+  description: |
+    Async research and brief synthesis API. The agent calls these endpoints
+    in sequence: start a research job, poll status until done, retrieve the
+    research result, then optionally synthesize a polished brief.
+  version: 0.6.0
+servers:
+  - url: https://singleangle-api-production.up.railway.app
+    description: Production
+paths:
+  /singleangle/start:
+    post:
+      operationId: startResearch
+      summary: Start a research job
+      description: |
+        Kicks off a research run on a topic. Returns a job_id immediately.
+        Research typically takes 60-120 seconds. Use the job_id to poll
+        /singleangle/status until the job is done.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - topic
+              properties:
+                topic:
+                  type: string
+                  description: The research topic. Required.
+                audience:
+                  type: string
+                  description: Target audience or ICP. Optional but improves brief quality.
+                depth:
+                  type: string
+                  enum: [quick, default, deep]
+                  default: default
+                  description: Research depth. quick=fast/shallow, default=balanced, deep=thorough/slow.
+                days:
+                  type: integer
+                  default: 30
+                  minimum: 1
+                  maximum: 30
+                  description: How many days back to search for sources.
+      responses:
+        '200':
+          description: Job started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                    description: Use this to poll status and retrieve results.
+                  status:
+                    type: string
+                  started_at:
+                    type: string
+
+  /singleangle/status:
+    get:
+      operationId: getJobStatus
+      summary: Check job status
+      description: |
+        Returns current status of a research job. Possible statuses are
+        running, done, or error. Poll this every 10-15 seconds until status
+        becomes done or error.
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                    enum: [running, done, error]
+                  phase:
+                    type: string
+                    description: Current internal phase (e.g. running_research, rendering_output).
+                  elapsed_seconds:
+                    type: number
+                  error:
+                    type: object
+                    description: Present if status is error.
+
+  /singleangle/result:
+    get:
+      operationId: getJobResult
+      summary: Retrieve completed research result
+      description: |
+        Returns the research markdown and structured report for a completed job.
+        Only call this when /singleangle/status returns status=done.
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Research result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  topic:
+                    type: string
+                  audience:
+                    type: string
+                  research_markdown:
+                    type: string
+                    description: Compact research markdown with Reddit threads and X posts.
+                  full_markdown:
+                    type: string
+                    description: Full long-form report.
+                  brief_markdown:
+                    type: string
+                    description: Polished SKILL.md-style brief. Null until /singleangle/brief is called.
+
+  /singleangle/brief:
+    post:
+      operationId: synthesizeBrief
+      summary: Synthesize a polished brief from completed research
+      description: |
+        Takes a completed job_id and produces a SKILL.md-style content brief
+        using gpt-5.5. Takes 15-45 seconds. Idempotent: if a brief already
+        exists for this job_id, returns the cached version.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - job_id
+              properties:
+                job_id:
+                  type: string
+                audience:
+                  type: string
+                  description: Override the audience for synthesis. Optional.
+                model:
+                  type: string
+                  default: gpt-5.5
+      responses:
+        '200':
+          description: Brief synthesized or cached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  cached:
+                    type: boolean
+                  brief_markdown:
+                    type: string
+                  brief_model:
+                    type: string
