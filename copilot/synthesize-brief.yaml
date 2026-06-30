@@ -1,0 +1,44 @@
+openapi: 3.0.1
+info:
+  title: Synthesize Brief
+  version: 0.6.0
+servers:
+  - url: https://singleangle-api-production.up.railway.app
+paths:
+  /singleangle/brief:
+    post:
+      operationId: synthesizeBrief
+      summary: Synthesize a polished brief from completed research
+      description: Generates a SKILL.md-style content brief using gpt-5.5. Takes 15-45 seconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - job_id
+              properties:
+                job_id:
+                  type: string
+                audience:
+                  type: string
+                model:
+                  type: string
+                  default: gpt-5.5
+      responses:
+        '200':
+          description: Brief synthesized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  brief_markdown:
+                    type: string
+                  brief_model:
+                    type: string
