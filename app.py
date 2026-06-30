@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 REPO_ROOT   = Path(__file__).parent.resolve()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-# Make `from lib import ...` resolve to scripts/lib/, like the original CLI does.
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 
@@ -51,7 +50,7 @@ from lib import schema as sa_schema
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.5"
+    version="0.4.0"
 )
 
 
@@ -127,6 +126,74 @@ def _ensure_list_of_dicts(items):
     return out
 
 
+def _build_report(topic, from_date, to_date, effective_sources,
+                  selected_models, result_tuple):
+    """Build a Report from a tuple-like run_research() return."""
+    reddit_items_raw = []
+    x_items_raw = []
+    reddit_error = None
+    x_error = None
+
+    if isinstance(result_tuple, tuple):
+        if len(result_tuple) >= 1 and isinstance(result_tuple[0], list):
+            reddit_items_raw = result_tuple[0]
+        if len(result_tuple) >= 2 and isinstance(result_tuple[1], list):
+            x_items_raw = result_tuple[1]
+        if len(result_tuple) >= 6 and isinstance(result_tuple[5], str):
+            reddit_error = result_tuple[5]
+        if len(result_tuple) >= 7 and isinstance(result_tuple[6], str):
+            x_error = result_tuple[6]
+
+    reddit_dicts = _ensure_list_of_dicts(reddit_items_raw)
+    x_dicts      = _ensure_list_of_dicts(x_items_raw)
+
+    payload = {
+        "topic": topic,
+        "range": {"from": from_date, "to": to_date},
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "mode": effective_sources,
+        "openai_model_used": (selected_models or {}).get("openai"),
+        "xai_model_used": (selected_models or {}).get("xai"),
+        "reddit": reddit_dicts,
+        "x": x_dicts,
+        "web": [],
+    }
+    if reddit_error:
+        payload["reddit_error"] = reddit_error
+    if x_error:
+        payload["x_error"] = x_error
+
+    report = sa_schema.Report.from_dict(payload)
+    return report, reddit_dicts, x_dicts, reddit_error, x_error
+
+
+def _shape_of(value, depth=0, max_depth=3):
+    """Return a JSON-safe description of a value's structure for introspection."""
+    if depth > max_depth:
+        return f"<truncated:{type(value).__name__}>"
+
+    if isinstance(value, dict):
+        return {
+            "type": "dict",
+            "keys": list(value.keys()),
+            "sample": {
+                k: _shape_of(v, depth + 1, max_depth)
+                for k, v in list(value.items())[:5]
+            },
+        }
+    if isinstance(value, (list, tuple)):
+        sample_items = list(value)[:3]
+        return {
+            "type": type(value).__name__,
+            "length": len(value),
+            "sample_item_shapes": [_shape_of(s, depth + 1, max_depth) for s in sample_items],
+        }
+    if value is None:
+        return "NoneType"
+
+    return f"<{type(value).__name__}>"
+
+
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
@@ -149,7 +216,6 @@ def _run_job(job_id: str):
             available=available,
             include_web=False,
         )
-
         if effective_sources == "none":
             raise RuntimeError(f"No valid sources for this configuration: {source_warning}")
 
@@ -162,78 +228,54 @@ def _run_job(job_id: str):
         _set_phase(job_id, "running_research")
 
         class _Progress:
-            """
-            Lightweight progress reporter expected by singleangle's run_research().
-            The original CLI passes a UI object with start_/done_/error_ methods.
-            We expose the same interface but route events into the async job state.
-            """
-
             def __init__(self, job_id: str):
                 self.job_id = job_id
 
-            # Reddit
-            def start_reddit(self, *args, **kwargs):
+            def start_reddit(self, *a, **kw):
                 _provider_event(self.job_id, "openai_reddit", status="running", started=time.time())
 
-            def done_reddit(self, *args, **kwargs):
+            def done_reddit(self, *a, **kw):
                 with JOBS_LOCK:
                     started_at = JOBS[self.job_id]["providers"]["openai_reddit"].get("started")
                 duration = (time.time() - started_at) if started_at else None
-                _provider_event(
-                    self.job_id, "openai_reddit",
-                    status="done",
-                    duration=round(duration, 2) if duration else None,
-                    item_count=kwargs.get("item_count"),
-                )
+                _provider_event(self.job_id, "openai_reddit",
+                                status="done",
+                                duration=round(duration, 2) if duration else None,
+                                item_count=kw.get("item_count"))
 
-            def error_reddit(self, *args, **kwargs):
-                _provider_event(
-                    self.job_id, "openai_reddit",
-                    status="error",
-                    error=kwargs.get("error") or (args[0] if args else None),
-                )
+            def error_reddit(self, *a, **kw):
+                _provider_event(self.job_id, "openai_reddit", status="error",
+                                error=kw.get("error") or (a[0] if a else None))
 
-            # X
-            def start_x(self, *args, **kwargs):
+            def start_x(self, *a, **kw):
                 _provider_event(self.job_id, "xai_x", status="running", started=time.time())
 
-            def done_x(self, *args, **kwargs):
+            def done_x(self, *a, **kw):
                 with JOBS_LOCK:
                     started_at = JOBS[self.job_id]["providers"]["xai_x"].get("started")
                 duration = (time.time() - started_at) if started_at else None
-                _provider_event(
-                    self.job_id, "xai_x",
-                    status="done",
-                    duration=round(duration, 2) if duration else None,
-                    item_count=kwargs.get("item_count"),
-                )
+                _provider_event(self.job_id, "xai_x",
+                                status="done",
+                                duration=round(duration, 2) if duration else None,
+                                item_count=kw.get("item_count"))
 
-            def error_x(self, *args, **kwargs):
-                _provider_event(
-                    self.job_id, "xai_x",
-                    status="error",
-                    error=kwargs.get("error") or (args[0] if args else None),
-                )
+            def error_x(self, *a, **kw):
+                _provider_event(self.job_id, "xai_x", status="error",
+                                error=kw.get("error") or (a[0] if a else None))
 
-            # Supplemental phase
-            def start_supplemental(self, *args, **kwargs):
+            def start_supplemental(self, *a, **kw):
                 _set_phase(self.job_id, "running_supplemental")
 
-            def done_supplemental(self, *args, **kwargs):
+            def done_supplemental(self, *a, **kw):
                 _set_phase(self.job_id, "supplemental_complete")
 
-            # Safety net for any other method singleangle calls
             def __getattr__(self, name):
-                def _noop(*args, **kwargs):
+                def _noop(*a, **kw):
                     _set_phase(self.job_id, f"engine:{name}")
                 return _noop
 
         progress = _Progress(job_id)
 
-        # The original run_research() returns a tuple, not a Report.
-        # Tuple layout used by the CLI:
-        #   (reddit_items, x_items, raw_openai, raw_xai,
-        #    raw_reddit_enriched, reddit_error, x_error)
         result = engine.run_research(
             topic=topic,
             sources=effective_sources,
@@ -247,64 +289,26 @@ def _run_job(job_id: str):
             x_source=x_source,
         )
 
-        reddit_items_raw = []
-        x_items_raw = []
-        reddit_error = None
-        x_error = None
-
-        if isinstance(result, tuple):
-            if len(result) >= 1 and isinstance(result[0], list):
-                reddit_items_raw = result[0]
-            if len(result) >= 2 and isinstance(result[1], list):
-                x_items_raw = result[1]
-            if len(result) >= 6 and isinstance(result[5], str):
-                reddit_error = result[5]
-            if len(result) >= 7 and isinstance(result[6], str):
-                x_error = result[6]
-
-        reddit_dicts = _ensure_list_of_dicts(reddit_items_raw)
-        x_dicts      = _ensure_list_of_dicts(x_items_raw)
-
-        openai_model_used = (selected_models or {}).get("openai")
-        xai_model_used    = (selected_models or {}).get("xai")
-
-        report_payload = {
-            "topic": topic,
-            "range": {"from": from_date, "to": to_date},
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "mode": effective_sources,
-            "openai_model_used": openai_model_used,
-            "xai_model_used": xai_model_used,
-            "reddit": reddit_dicts,
-            "x": x_dicts,
-            "web": [],
-        }
-        if reddit_error:
-            report_payload["reddit_error"] = reddit_error
-        if x_error:
-            report_payload["x_error"] = x_error
-
-        # Let schema rebuild proper dataclasses so render_compact works.
-        report = sa_schema.Report.from_dict(report_payload)
-
-        _provider_event(
-            job_id, "openai_reddit",
-            status="error" if reddit_error else "done",
-            item_count=len(reddit_dicts),
-            error=reddit_error,
+        report, reddit_dicts, x_dicts, reddit_error, x_error = _build_report(
+            topic, from_date, to_date, effective_sources, selected_models, result
         )
-        _provider_event(
-            job_id, "xai_x",
-            status="error" if x_error else "done",
-            item_count=len(x_dicts),
-            error=x_error,
-        )
+
+        _provider_event(job_id, "openai_reddit",
+                        status="error" if reddit_error else "done",
+                        item_count=len(reddit_dicts),
+                        error=reddit_error)
+        _provider_event(job_id, "xai_x",
+                        status="error" if x_error else "done",
+                        item_count=len(x_dicts),
+                        error=x_error)
 
         _set_phase(job_id, "rendering_output")
-
         missing_keys = sa_env.get_missing_keys(config)
+
         research_markdown = sa_render.render_compact(report, missing_keys=missing_keys)
-        report_json = report.to_dict()
+        full_markdown     = sa_render.render_full_report(report)
+        context_markdown  = sa_render.render_context_snippet(report)
+        report_json       = report.to_dict()
 
         total = time.time() - started
 
@@ -319,6 +323,8 @@ def _run_job(job_id: str):
                 "from_date": from_date,
                 "to_date": to_date,
                 "research_markdown": research_markdown,
+                "full_markdown": full_markdown,
+                "context_markdown": context_markdown,
                 "report_json": report_json,
                 "source_warning": source_warning,
             }
@@ -354,6 +360,55 @@ def debug_env():
         "openai_model_policy": config.get("OPENAI_MODEL_POLICY"),
         "xai_model_policy": config.get("XAI_MODEL_POLICY"),
         "available_sources": sa_env.get_available_sources(config),
+    }
+
+
+@app.get("/debug-engine-shape")
+def debug_engine_shape(topic: str = "AI in B2B sales execution"):
+    """
+    Runs the engine in mock mode and returns the actual structure of run_research().
+    Use this to introspect the wrapper boundary without burning OpenAI / xAI calls.
+    """
+    config = sa_env.get_config()
+    available = sa_env.get_available_sources(config)
+    effective_sources, _ = sa_env.validate_sources(
+        requested="auto",
+        available=available,
+        include_web=False,
+    )
+    selected_models = sa_models.get_models(config)
+    from_date, to_date = sa_dates.get_date_range(days=30)
+
+    class _NullProgress:
+        def __getattr__(self, name):
+            def _noop(*a, **kw): pass
+            return _noop
+
+    try:
+        raw = engine.run_research(
+            topic=topic,
+            sources=effective_sources,
+            config=config,
+            selected_models=selected_models,
+            from_date=from_date,
+            to_date=to_date,
+            depth="default",
+            mock=True,
+            progress=_NullProgress(),
+            x_source="xai",
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()[-2000:],
+        }
+
+    return {
+        "ok": True,
+        "mock": True,
+        "return_type": type(raw).__name__,
+        "shape": _shape_of(raw),
     }
 
 
@@ -447,8 +502,10 @@ def result(job_id: str):
         "from_date": job["result"]["from_date"],
         "to_date": job["result"]["to_date"],
         "research_markdown": job["result"]["research_markdown"],
+        "full_markdown": job["result"].get("full_markdown"),
+        "context_markdown": job["result"].get("context_markdown"),
         "report_json": job["result"]["report_json"],
-        "source_warning": job["result"].get("source_warning")
+        "source_warning": job["result"].get("source_warning"),
     }
 
 
