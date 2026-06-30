@@ -42,6 +42,7 @@ from lib import env as sa_env
 from lib import models as sa_models
 from lib import render as sa_render
 from lib import dates as sa_dates
+from lib import schema as sa_schema
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +51,7 @@ from lib import dates as sa_dates
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.4"
+    version="0.3.5"
 )
 
 
@@ -115,6 +116,17 @@ def _provider_event(job_id: str, name: str, **fields):
             JOBS[job_id]["providers"][name].update(fields)
 
 
+def _ensure_list_of_dicts(items):
+    """Normalize provider output into a list of dicts so Report.from_dict can rebuild dataclasses."""
+    out = []
+    for item in items or []:
+        if isinstance(item, dict):
+            out.append(item)
+        elif hasattr(item, "to_dict"):
+            out.append(item.to_dict())
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
@@ -150,9 +162,16 @@ def _run_job(job_id: str):
         _set_phase(job_id, "running_research")
 
         class _Progress:
+            """
+            Lightweight progress reporter expected by singleangle's run_research().
+            The original CLI passes a UI object with start_/done_/error_ methods.
+            We expose the same interface but route events into the async job state.
+            """
+
             def __init__(self, job_id: str):
                 self.job_id = job_id
 
+            # Reddit
             def start_reddit(self, *args, **kwargs):
                 _provider_event(self.job_id, "openai_reddit", status="running", started=time.time())
 
@@ -174,6 +193,7 @@ def _run_job(job_id: str):
                     error=kwargs.get("error") or (args[0] if args else None),
                 )
 
+            # X
             def start_x(self, *args, **kwargs):
                 _provider_event(self.job_id, "xai_x", status="running", started=time.time())
 
@@ -195,12 +215,14 @@ def _run_job(job_id: str):
                     error=kwargs.get("error") or (args[0] if args else None),
                 )
 
+            # Supplemental phase
             def start_supplemental(self, *args, **kwargs):
                 _set_phase(self.job_id, "running_supplemental")
 
             def done_supplemental(self, *args, **kwargs):
                 _set_phase(self.job_id, "supplemental_complete")
 
+            # Safety net for any other method singleangle calls
             def __getattr__(self, name):
                 def _noop(*args, **kwargs):
                     _set_phase(self.job_id, f"engine:{name}")
@@ -208,6 +230,10 @@ def _run_job(job_id: str):
 
         progress = _Progress(job_id)
 
+        # The original run_research() returns a tuple, not a Report.
+        # Tuple layout used by the CLI:
+        #   (reddit_items, x_items, raw_openai, raw_xai,
+        #    raw_reddit_enriched, reddit_error, x_error)
         result = engine.run_research(
             topic=topic,
             sources=effective_sources,
@@ -221,62 +247,56 @@ def _run_job(job_id: str):
             x_source=x_source,
         )
 
-        # ------------------------------------------------------------------
-        # Assemble a real Report from raw engine output.
-        #
-        # The original CLI does this in main() after calling run_research().
-        # We reproduce the minimum needed for render_compact() to work.
-        # Tuple layout used by the CLI:
-        #   (reddit_items, x_items, raw_openai, raw_xai,
-        #    raw_reddit_enriched, reddit_error, x_error)
-        # ------------------------------------------------------------------
-        from lib import schema as sa_schema
-
-        reddit_items = []
-        x_items = []
+        reddit_items_raw = []
+        x_items_raw = []
         reddit_error = None
         x_error = None
 
         if isinstance(result, tuple):
             if len(result) >= 1 and isinstance(result[0], list):
-                reddit_items = result[0]
+                reddit_items_raw = result[0]
             if len(result) >= 2 and isinstance(result[1], list):
-                x_items = result[1]
+                x_items_raw = result[1]
             if len(result) >= 6 and isinstance(result[5], str):
                 reddit_error = result[5]
             if len(result) >= 7 and isinstance(result[6], str):
                 x_error = result[6]
 
+        reddit_dicts = _ensure_list_of_dicts(reddit_items_raw)
+        x_dicts      = _ensure_list_of_dicts(x_items_raw)
+
         openai_model_used = (selected_models or {}).get("openai")
         xai_model_used    = (selected_models or {}).get("xai")
 
-        report = sa_schema.create_report(
-            topic=topic,
-            from_date=from_date,
-            to_date=to_date,
-            mode=effective_sources,
-            openai_model=openai_model_used,
-            xai_model=xai_model_used,
-        )
-        report.reddit = reddit_items
-        report.x      = x_items
+        report_payload = {
+            "topic": topic,
+            "range": {"from": from_date, "to": to_date},
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "mode": effective_sources,
+            "openai_model_used": openai_model_used,
+            "xai_model_used": xai_model_used,
+            "reddit": reddit_dicts,
+            "x": x_dicts,
+            "web": [],
+        }
         if reddit_error:
-            report.reddit_error = reddit_error
+            report_payload["reddit_error"] = reddit_error
         if x_error:
-            report.x_error = x_error
+            report_payload["x_error"] = x_error
 
-        # Update provider tracking to reflect real counts and errors,
-        # without using the raw provider payloads as error messages.
+        # Let schema rebuild proper dataclasses so render_compact works.
+        report = sa_schema.Report.from_dict(report_payload)
+
         _provider_event(
             job_id, "openai_reddit",
             status="error" if reddit_error else "done",
-            item_count=len(reddit_items),
+            item_count=len(reddit_dicts),
             error=reddit_error,
         )
         _provider_event(
             job_id, "xai_x",
             status="error" if x_error else "done",
-            item_count=len(x_items),
+            item_count=len(x_dicts),
             error=x_error,
         )
 
@@ -315,6 +335,7 @@ def _run_job(job_id: str):
                     "message": str(e),
                     "traceback": tb[-4000:],
                 }
+
 
 # ---------------------------------------------------------------------------
 # Health and debug endpoints
