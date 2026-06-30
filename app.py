@@ -50,7 +50,7 @@ from lib import dates as sa_dates
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
-    version="0.3.3"
+    version="0.3.4"
 )
 
 
