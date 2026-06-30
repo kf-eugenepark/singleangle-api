@@ -12,23 +12,13 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# Repo layout assumption (matches upstream singleangle):
-#
-#   /app.py
-#   /scripts/singleangle-research.py
-#   /scripts/lib/
-# ---------------------------------------------------------------------------
 REPO_ROOT   = Path(__file__).parent.resolve()
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-# Add scripts/ to sys.path so `from lib import ...` resolves to scripts/lib/,
-# exactly like the original CLI does.
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def _load_engine():
-    """Load scripts/singleangle-research.py as a module (hyphen prevents normal import)."""
     engine_path = SCRIPTS_DIR / "singleangle-research.py"
     spec = importlib.util.spec_from_file_location("singleangle_research", str(engine_path))
     module = importlib.util.module_from_spec(spec)
@@ -38,16 +28,12 @@ def _load_engine():
 
 engine = _load_engine()
 
-# Lib helpers used at the API boundary
 from lib import env as sa_env
 from lib import models as sa_models
 from lib import render as sa_render
 from lib import dates as sa_dates
 
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
 app = FastAPI(
     title="SingleAngle API (async wrapper)",
     description="Async wrapper around the original singleangle research engine.",
@@ -55,9 +41,6 @@ app = FastAPI(
 )
 
 
-# ---------------------------------------------------------------------------
-# Request models
-# ---------------------------------------------------------------------------
 class StartRequest(BaseModel):
     topic: str = Field(..., description="Topic to research.")
     audience: Optional[str] = Field(default="", description="Optional audience or ICP context.")
@@ -73,9 +56,6 @@ class StartResponse(BaseModel):
     started_at: str
 
 
-# ---------------------------------------------------------------------------
-# Job store
-# ---------------------------------------------------------------------------
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
 
@@ -121,9 +101,9 @@ def _run_job(job_id: str):
     try:
         with JOBS_LOCK:
             job = JOBS[job_id]
-            topic   = job["topic"]
-            depth   = job["depth"]
-            days    = job["days"]
+            topic = job["topic"]
+            depth = job["depth"]
+            days  = job["days"]
             sources_requested = job["sources"]
             x_source = job["x_source"]
 
@@ -157,7 +137,8 @@ def _run_job(job_id: str):
                     started_at = JOBS[job_id]["providers"]["openai_reddit"].get("started")
                 duration = (time.time() - started_at) if started_at else None
                 _provider_event(
-                    job_id, "openai_reddit",
+                    job_id,
+                    "openai_reddit",
                     status="done",
                     duration=round(duration, 2) if duration else None,
                     item_count=kwargs.get("item_count"),
@@ -173,7 +154,8 @@ def _run_job(job_id: str):
                         started_at = JOBS[job_id]["providers"]["xai_x"].get("started")
                     duration = (time.time() - started_at) if started_at else None
                     _provider_event(
-                        job_id, "xai_x",
+                        job_id,
+                        "xai_x",
                         status="done",
                         duration=round(duration, 2) if duration else None,
                         item_count=kwargs.get("item_count"),
@@ -234,9 +216,6 @@ def _run_job(job_id: str):
                 }
 
 
-# ---------------------------------------------------------------------------
-# Health and debug endpoints
-# ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok", "version": app.version}
@@ -254,9 +233,6 @@ def debug_env():
     }
 
 
-# ---------------------------------------------------------------------------
-# Async endpoints
-# ---------------------------------------------------------------------------
 @app.post("/singleangle/start", response_model=StartResponse)
 def start(req: StartRequest):
     if not req.topic or not req.topic.strip():
@@ -320,14 +296,14 @@ def result(job_id: str):
         return {
             "job_id": job["job_id"],
             "status": "running",
-            "message": "Job is still running. Poll /singleangle/status until it returns done.",
+            "message": "Job is still running. Poll /singleangle/status until it returns done."
         }
 
     if job["status"] == "error":
         return {
             "job_id": job["job_id"],
             "status": "error",
-            "error": job["error"],
+            "error": job["error"]
         }
 
     return {
@@ -339,3 +315,17 @@ def result(job_id: str):
         "days": job["days"],
         "sources": job["sources"],
         "x_source": job["x_source"],
+        "providers_timing": job["providers"],
+        "total_duration_seconds": job["elapsed_seconds"],
+        "from_date": job["result"]["from_date"],
+        "to_date": job["result"]["to_date"],
+        "research_markdown": job["result"]["research_markdown"],
+        "report_json": job["result"]["report_json"],
+        "source_warning": job["result"].get("source_warning")
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
