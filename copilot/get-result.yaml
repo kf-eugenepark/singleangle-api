@@ -1,0 +1,38 @@
+openapi: 3.0.1
+info:
+  title: Get Job Result
+  version: 0.6.0
+servers:
+  - url: https://singleangle-api-production.up.railway.app
+paths:
+  /singleangle/result:
+    get:
+      operationId: getJobResult
+      summary: Retrieve completed research result
+      description: Returns research_markdown and other outputs. Only call when status is done.
+      parameters:
+        - name: job_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Research result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: string
+                  status:
+                    type: string
+                  topic:
+                    type: string
+                  audience:
+                    type: string
+                  research_markdown:
+                    type: string
+                  brief_markdown:
+                    type: string
