@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SingleAngle Internal</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161922;
+    --border: #262b36;
+    --text: #e6e8ee;
+    --muted: #8a93a6;
+    --accent: #6aa6ff;
+    --good: #4ade80;
+    --bad: #f87171;
+    --warn: #facc15;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .version { color: var(--muted); font-size: 12px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input, select, textarea {
+    width: 100%;
+    background: #0c0f15;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  textarea { min-height: 60px; resize: vertical; }
+  .row { display: grid; grid-template-columns: 2fr 2fr 1fr 1fr; gap: 12px; }
+  .row-actions { margin-top: 12px; display: flex; gap: 8px; }
+  button {
+    background: var(--accent);
+    color: #0c0f15;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status-row {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    font-size: 13px; color: var(--muted);
+  }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: #1f2433;
+    color: var(--text);
+  }
+  .pill.good { background: #14321f; color: var(--good); }
+  .pill.bad  { background: #3a1414; color: var(--bad); }
+  .pill.warn { background: #3a2f0c; color: var(--warn); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+  .tab {
+    padding: 8px 12px;
+    cursor: pointer;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  pre {
+    background: #0c0f15;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow: auto;
+    max-height: 60vh;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .markdown { line-height: 1.55; font-size: 15px; }
+  .markdown h1, .markdown h2, .markdown h3 { margin-top: 1.2em; }
+  .markdown a { color: var(--accent); }
+  .markdown table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  .markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 8px; font-size: 13px; }
+  .error { color: var(--bad); font-family: ui-monospace, monospace; white-space: pre-wrap; }
+  .muted { color: var(--muted); }
+  .footer {
+    margin-top: 24px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SingleAngle (internal)</h1>
+  <div class="version" id="version">…</div>
+</header>
+
+<main>
+  <div class="grid">
+    <section class="panel">
+      <h3 style="margin-top:0">Run research</h3>
+      <div class="row">
+        <div>
+          <label for="topic">Topic</label>
+          <input id="topic" placeholder="e.g. AI in B2B sales execution" />
+        </div>
+        <div>
+          <label for="audience">Audience (optional)</label>
+          <input id="audience" placeholder="e.g. VP Sales and CROs at B2B SaaS" />
+        </div>
+        <div>
+          <label for="depth">Depth</label>
+          <select id="depth">
+            <option value="quick">quick</option>
+            <option value="default" selected>default</option>
+            <option value="deep">deep</option>
+          </select>
+        </div>
+        <div>
+          <label for="days">Days</label>
+          <input id="days" type="number" value="30" min="1" max="30" />
+        </div>
+      </div>
+      <div class="row-actions">
+        <button id="runBtn">Run</button>
+        <button id="cancelBtn" class="secondary" disabled>Stop polling</button>
+      </div>
+      <div class="status-row" id="statusRow" style="margin-top:14px; display:none;">
+        <span>Status: <span id="jobStatus" class="pill">pending</span></span>
+        <span>Phase: <span id="jobPhase">-</span></span>
+        <span>Elapsed: <span id="jobElapsed">0</span>s</span>
+        <span>Reddit: <span id="rStatus" class="pill">pending</span> (<span id="rCount">0</span>)</span>
+        <span>X: <span id="xStatus" class="pill">pending</span> (<span id="xCount">0</span>)</span>
+        <span class="muted">Job: <span id="jobId">-</span></span>
+      </div>
+    </section>
+
+    <section class="panel" id="resultPanel" style="display:none">
+      <div class="tabs">
+        <div class="tab active" data-tab="compact">Compact</div>
+        <div class="tab" data-tab="full">Full report</div>
+        <div class="tab" data-tab="json">JSON</div>
+      </div>
+      <div id="tabCompact" class="markdown"></div>
+      <div id="tabFull" class="markdown" style="display:none"></div>
+      <div id="tabJson" style="display:none">
+        <pre id="jsonPre"></pre>
+      </div>
+      <div class="row-actions" style="margin-top:16px">
+        <button id="copyMd" class="secondary">Copy compact markdown</button>
+        <button id="downloadMd" class="secondary">Download .md</button>
+      </div>
+    </section>
+
+    <section class="panel" id="errorPanel" style="display:none">
+      <h3 style="margin-top:0; color: var(--bad)">Error</h3>
+      <div id="errorBox" class="error"></div>
+    </section>
+  </div>
+
+  <div class="footer">
+    Internal tool. Free Railway tier may sleep when idle. First call after sleep can take ~30s extra.
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+let currentJobId = null;
+let lastResult = null;
+
+async function loadVersion() {
+  try {
+    const r = await fetch("/health");
+    const j = await r.json();
+    $("version").textContent = "v" + (j.version || "?");
+  } catch (e) {
+    $("version").textContent = "offline";
+  }
+}
+
+function setPill(el, status) {
+  el.textContent = status || "pending";
+  el.classList.remove("good","bad","warn");
+  if (status === "done") el.classList.add("good");
+  else if (status === "error") el.classList.add("bad");
+  else if (status === "running") el.classList.add("warn");
+}
+
+function showError(msg) {
+  $("errorPanel").style.display = "block";
+  $("errorBox").textContent = msg;
+}
+
+function clearError() {
+  $("errorPanel").style.display = "none";
+  $("errorBox").textContent = "";
+}
+
+async function startRun() {
+  clearError();
+  $("resultPanel").style.display = "none";
+
+  const body = {
+    topic: $("topic").value.trim(),
+    audience: $("audience").value.trim(),
+    depth: $("depth").value,
+    days: parseInt($("days").value || "30", 10),
+    sources: "auto",
+    x_source: "xai",
+  };
+  if (!body.topic) {
+    showError("Topic is required.");
+    return;
+  }
+
+  $("runBtn").disabled = true;
+  $("cancelBtn").disabled = false;
+  $("statusRow").style.display = "flex";
+
+  let startRes;
+  try {
+    const r = await fetch("/singleangle/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    startRes = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(startRes));
+  } catch (e) {
+    showError("Start failed: " + e.message);
+    $("runBtn").disabled = false;
+    $("cancelBtn").disabled = true;
+    return;
+  }
+
+  currentJobId = startRes.job_id;
+  $("jobId").textContent = currentJobId;
+  setPill($("jobStatus"), startRes.status);
+  $("jobPhase").textContent = "running";
+
+  pollTimer = setInterval(pollStatus, 5000);
+  pollStatus();
+}
+
+async function pollStatus() {
+  if (!currentJobId) return;
+  try {
+    const r = await fetch("/singleangle/status?job_id=" + encodeURIComponent(currentJobId));
+    const j = await r.json();
+
+    setPill($("jobStatus"), j.status);
+    $("jobPhase").textContent = j.phase || "-";
+    $("jobElapsed").textContent = (j.elapsed_seconds || 0).toFixed(1);
+
+    const rp = (j.providers && j.providers.openai_reddit) || {};
+    const xp = (j.providers && j.providers.xai_x) || {};
+    setPill($("rStatus"), rp.status);
+    setPill($("xStatus"), xp.status);
+    $("rCount").textContent = rp.item_count != null ? rp.item_count : 0;
+    $("xCount").textContent = xp.item_count != null ? xp.item_count : 0;
+
+    if (j.status === "done") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      $("cancelBtn").disabled = true;
+      $("runBtn").disabled = false;
+      await fetchResult();
+    } else if (j.status === "error") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      $("cancelBtn").disabled = true;
+      $("runBtn").disabled = false;
+      showError(JSON.stringify(j.error || {}, null, 2));
+    }
+  } catch (e) {
+    showError("Status poll failed: " + e.message);
+  }
+}
+
+async function fetchResult() {
+  try {
+    const r = await fetch("/singleangle/result?job_id=" + encodeURIComponent(currentJobId));
+    const j = await r.json();
+    if (j.status !== "done") {
+      showError("Result not ready: " + JSON.stringify(j));
+      return;
+    }
+    lastResult = j;
+    renderResult(j);
+  } catch (e) {
+    showError("Result fetch failed: " + e.message);
+  }
+}
+
+function renderResult(j) {
+  $("resultPanel").style.display = "block";
+  const compactMd = j.research_markdown || "";
+  const fullMd    = j.full_markdown || "";
+  $("tabCompact").innerHTML = marked.parse(compactMd);
+  $("tabFull").innerHTML = marked.parse(fullMd);
+  $("jsonPre").textContent = JSON.stringify(j.report_json || {}, null, 2);
+}
+
+function switchTab(name) {
+  for (const t of document.querySelectorAll(".tab")) {
+    t.classList.toggle("active", t.dataset.tab === name);
+  }
+  $("tabCompact").style.display = name === "compact" ? "block" : "none";
+  $("tabFull").style.display = name === "full" ? "block" : "none";
+  $("tabJson").style.display = name === "json" ? "block" : "none";
+}
+
+function copyMarkdown() {
+  if (!lastResult) return;
+  navigator.clipboard.writeText(lastResult.research_markdown || "");
+}
+
+function downloadMarkdown() {
+  if (!lastResult) return;
+  const blob = new Blob([lastResult.research_markdown || ""], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const slug = (lastResult.topic || "research").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+  a.download = "singleangle-" + slug + ".md";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadVersion();
+  $("runBtn").addEventListener("click", startRun);
+  $("cancelBtn").addEventListener("click", () => {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+    $("cancelBtn").disabled = true;
+    $("runBtn").disabled = false;
+  });
+  for (const t of document.querySelectorAll(".tab")) {
+    t.addEventListener("click", () => switchTab(t.dataset.tab));
+  }
+  $("copyMd").addEventListener("click", copyMarkdown);
+  $("downloadMd").addEventListener("click", downloadMarkdown);
+});
+</script>
+</body>
+</html>
